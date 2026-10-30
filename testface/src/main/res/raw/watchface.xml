@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WatchFace width="450" height="450">
+    <Metadata key="CLOCK_TYPE" value="DIGITAL" />
+    <Metadata key="PREVIEW_TIME" value="10:08:32" />
+    <Scene backgroundColor="#ff000000">
+        <DigitalClock x="75" y="40" width="300" height="90">
+            <TimeText format="HH:mm" align="CENTER" x="0" y="0" width="300" height="90">
+                <Font family="SYNC_TO_DEVICE" size="72" weight="BOLD" color="#ffe4ece9" />
+            </TimeText>
+        </DigitalClock>
+
+        <!-- Slot 0: long text (pressure by default) -->
+        <ComplicationSlot slotId="0" x="40" y="140" width="370" height="84"
+            supportedTypes="LONG_TEXT SHORT_TEXT" isCustomizable="TRUE">
+            <DefaultProviderPolicy defaultSystemProvider="EMPTY" defaultSystemProviderType="SHORT_TEXT"
+                primaryProvider="app.altikit/app.altikit.complication.PressureComplicationService"
+                primaryProviderType="LONG_TEXT" />
+            <BoundingBox x="0" y="0" width="370" height="84" />
+            <Complication type="LONG_TEXT">
+                <PartText x="0" y="2" width="370" height="44">
+                    <Text align="CENTER" ellipsis="TRUE">
+                        <Font family="SYNC_TO_DEVICE" size="32" color="#ffffb300">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+                <PartText x="0" y="46" width="370" height="34">
+                    <Text align="CENTER" ellipsis="TRUE">
+                        <Font family="SYNC_TO_DEVICE" size="22" color="#ff2ee6ff">
+                            <Template>%s<Parameter expression="[COMPLICATION.TITLE]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+            </Complication>
+            <Complication type="SHORT_TEXT">
+                <PartText x="0" y="2" width="370" height="44">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="32" color="#ffffb300">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+            </Complication>
+        </ComplicationSlot>
+
+        <!-- Slot 1: ranged value (altitude by default) -->
+        <ComplicationSlot slotId="1" x="70" y="240" width="140" height="140"
+            supportedTypes="RANGED_VALUE SHORT_TEXT" isCustomizable="TRUE">
+            <DefaultProviderPolicy defaultSystemProvider="EMPTY" defaultSystemProviderType="SHORT_TEXT"
+                primaryProvider="app.altikit/app.altikit.complication.AltitudeComplicationService"
+                primaryProviderType="RANGED_VALUE" />
+            <BoundingBox x="0" y="0" width="140" height="140" />
+            <Complication type="RANGED_VALUE">
+                <PartDraw x="0" y="0" width="140" height="140">
+                    <Arc centerX="70" centerY="70" width="128" height="128" startAngle="-135" endAngle="135">
+                        <Stroke color="#ff1c2826" thickness="8" cap="ROUND" />
+                    </Arc>
+                    <Arc centerX="70" centerY="70" width="128" height="128" startAngle="-135" endAngle="135">
+                        <Transform target="endAngle"
+                            value="-135 + 270 * ([COMPLICATION.RANGED_VALUE_VALUE] - [COMPLICATION.RANGED_VALUE_MIN]) / ([COMPLICATION.RANGED_VALUE_MAX] - [COMPLICATION.RANGED_VALUE_MIN])" />
+                        <Stroke color="#ff7cff5e" thickness="8" cap="ROUND" />
+                    </Arc>
+                </PartDraw>
+                <PartText x="0" y="38" width="140" height="40">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="30" weight="BOLD" color="#ffe4ece9">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+                <PartText x="0" y="78" width="140" height="30">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="20" color="#ff7a8c88">
+                            <Template>%s<Parameter expression="[COMPLICATION.TITLE]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+            </Complication>
+            <Complication type="SHORT_TEXT">
+                <PartText x="0" y="38" width="140" height="40">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="30" weight="BOLD" color="#ffe4ece9">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+                <PartText x="0" y="78" width="140" height="30">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="20" color="#ff7a8c88">
+                            <Template>%s<Parameter expression="[COMPLICATION.TITLE]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+            </Complication>
+        </ComplicationSlot>
+
+        <!-- Slot 2: short text (altitude by default) -->
+        <ComplicationSlot slotId="2" x="240" y="240" width="140" height="140"
+            supportedTypes="SHORT_TEXT RANGED_VALUE" isCustomizable="TRUE">
+            <DefaultProviderPolicy defaultSystemProvider="EMPTY" defaultSystemProviderType="SHORT_TEXT"
+                primaryProvider="app.altikit/app.altikit.complication.PressureComplicationService"
+                primaryProviderType="SHORT_TEXT" />
+            <BoundingBox x="0" y="0" width="140" height="140" />
+            <Complication type="SHORT_TEXT">
+                <PartDraw x="0" y="0" width="140" height="140">
+                    <Ellipse x="6" y="6" width="128" height="128">
+                        <Stroke color="#ff2ee6ff" thickness="3" />
+                    </Ellipse>
+                </PartDraw>
+                <PartText x="0" y="38" width="140" height="40">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="30" weight="BOLD" color="#ffe4ece9">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+                <PartText x="0" y="78" width="140" height="30">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="20" color="#ff7a8c88">
+                            <Template>%s<Parameter expression="[COMPLICATION.TITLE]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+            </Complication>
+            <Complication type="RANGED_VALUE">
+                <PartText x="0" y="38" width="140" height="40">
+                    <Text align="CENTER">
+                        <Font family="SYNC_TO_DEVICE" size="30" weight="BOLD" color="#ffe4ece9">
+                            <Template>%s<Parameter expression="[COMPLICATION.TEXT]" /></Template>
+                        </Font>
+                    </Text>
+                </PartText>
+            </Complication>
+        </ComplicationSlot>
+    </Scene>
+</WatchFace>
