@@ -2,6 +2,8 @@ package app.altikit.ui
 
 import android.graphics.Paint
 import android.graphics.Typeface
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,12 +26,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -46,10 +51,12 @@ import app.altikit.core.Mode
 import app.altikit.core.Tendency
 import app.altikit.core.Units
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlin.math.abs
 import kotlin.math.roundToLong
 
 private const val PAGES = 5
+private const val INDICATOR_HIDE_MS = 1_500L
 
 @Composable
 fun MainPager(state: UiState, vm: MainViewModel, onNav: (String) -> Unit) {
@@ -73,7 +80,26 @@ fun MainPager(state: UiState, vm: MainViewModel, onNav: (String) -> Unit) {
                 }
             }
         }
-        VerticalPageIndicator(pagerState = pager, modifier = Modifier.align(Alignment.CenterEnd))
+        // The dots sit over the bezel scales, so only show them while paging and briefly after.
+        var showIndicator by remember { mutableStateOf(true) }
+        LaunchedEffect(pager) {
+            snapshotFlow { pager.isScrollInProgress to pager.currentPage }.collectLatest { (scrolling, _) ->
+                showIndicator = true
+                if (!scrolling) {
+                    delay(INDICATOR_HIDE_MS)
+                    showIndicator = false
+                }
+            }
+        }
+        val indicatorAlpha by animateFloatAsState(
+            targetValue = if (showIndicator) 1f else 0f,
+            animationSpec = tween(if (showIndicator) 150 else 400),
+            label = "indicatorAlpha",
+        )
+        VerticalPageIndicator(
+            pagerState = pager,
+            modifier = Modifier.align(Alignment.CenterEnd).graphicsLayer { alpha = indicatorAlpha },
+        )
         // Clock sits in the dial's bottom gap so it never covers the 12 o'clock index.
         BottomClock(Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp))
         if (!state.sensorOk) {
