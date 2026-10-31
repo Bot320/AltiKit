@@ -26,6 +26,9 @@ import app.altikit.core.Mode
 import app.altikit.core.Snapshot
 import app.altikit.core.Tendency
 import app.altikit.core.Units
+import app.altikit.core.forecast.Forecast
+import app.altikit.core.forecast.Source
+import app.altikit.core.forecast.WxClass
 import app.altikit.ui.MainActivity
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.Dispatchers
@@ -69,6 +72,22 @@ class AltTileService : TileService() {
             .build()
 
     private fun gap(h: Float): LayoutElement = Spacer.Builder().setHeight(dp(h)).build()
+
+    /** "FCST RAIN 64%" or "ZAMB R · RAIN", from the source chosen for alerts. */
+    private fun forecastLine(f: Forecast?): LayoutElement {
+        if (f == null) return text("FCST --", 10f, DIM)
+        val color = when (f.cls) {
+            WxClass.FAIR -> GREEN
+            WxClass.CLOUDY -> TEXT
+            WxClass.RAIN -> CYAN
+            WxClass.STORM -> RED
+        }
+        val s = when (f.source) {
+            Source.AI -> "FCST ${f.cls.label} ${((f.confidence ?: 0.0) * 100).toInt()}%"
+            Source.ZAMBRETTI -> "ZAMB ${f.zambretti?.letter} · ${f.cls.label}"
+        }
+        return text(s, 10f, color, bold = true)
+    }
 
     private fun layout(snap: Snapshot?): LayoutElement {
         val open = ModifiersBuilders.Modifiers.Builder()
@@ -133,7 +152,7 @@ class AltTileService : TileService() {
                     11f, trendColor, bold = true,
                 )
             )
-            .addContent(text("CAL ${Units.age(snap.config.calTime)}", 9f, DIM))
+            .addContent(forecastLine(snap.forecasts[snap.config.alertSource]))
             .build()
         return root.addContent(col).build()
     }

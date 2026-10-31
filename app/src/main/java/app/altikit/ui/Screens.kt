@@ -1,7 +1,9 @@
 package app.altikit.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -39,12 +41,15 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.ScalingLazyListScope
+import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material.Text
 import app.altikit.core.Mode
 import app.altikit.core.Units
+import app.altikit.core.forecast.Source
 import kotlinx.coroutines.launch
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
 @Composable
@@ -154,10 +159,19 @@ fun CalRunScreen(gps: Boolean, vm: MainViewModel, onDone: () -> Unit) {
     }
 }
 
+private fun Context.granted(permission: String) =
+    ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
 @Composable
 fun SettingsScreen(state: UiState, vm: MainViewModel) {
+    val ctx = LocalContext.current
     val cfg = state.cfg
-    val baro = cfg.mode == Mode.BAROMETER
+    var motionOk by remember { mutableStateOf(ctx.granted(Manifest.permission.ACTIVITY_RECOGNITION)) }
+    val motionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        motionOk = ok
+        if (ok) vm.motionPermissionChanged()
+    }
+    val notifyLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     TacList {
         item { Header("SETTINGS", Tac.Cyan) }
         item {
@@ -166,11 +180,30 @@ fun SettingsScreen(state: UiState, vm: MainViewModel) {
             }
         }
         item {
+            val next = when (cfg.mode) {
+                Mode.AUTO -> Mode.ALTIMETER
+                Mode.ALTIMETER -> Mode.BAROMETER
+                Mode.BAROMETER -> Mode.AUTO
+            }
             TacButton(
                 "MODE", Tac.Amber, Modifier.fillMaxWidth(),
-                sub = if (baro) "ALT LOCKED · QNH LIVE" else "QNH FIXED · ALT LIVE",
-                value = if (baro) "BARO" else "ALTI",
-            ) { vm.setMode(if (baro) Mode.ALTIMETER else Mode.BAROMETER) }
+                sub = when (cfg.mode) {
+                    Mode.AUTO -> "MOTION SPLITS ALT/WX"
+                    Mode.ALTIMETER -> "QNH FIXED · ALT LIVE"
+                    Mode.BAROMETER -> "ALT LOCKED · QNH LIVE"
+                },
+                value = cfg.mode.tag,
+            ) {
+                vm.setMode(next)
+                if (next == Mode.AUTO && !motionOk) motionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+            }
+        }
+        if (cfg.mode == Mode.AUTO && !motionOk) {
+            item {
+                TacButton("STEP SENSOR", Tac.Amber, Modifier.fillMaxWidth(), sub = "TAP TO ALLOW · BETTER AUTO", value = "OFF") {
+                    motionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+                }
+            }
         }
         item {
             val opts = listOf(15, 30, 60, 0)
@@ -180,12 +213,73 @@ fun SettingsScreen(state: UiState, vm: MainViewModel) {
                 value = if (cfg.logMinutes == 0) "OFF" else "${cfg.logMinutes}m",
             ) { vm.setLogMinutes(opts[(opts.indexOf(cfg.logMinutes) + 1) % opts.size]) }
         }
+        item {
+            TacButton(
+                "FCST ALERTS", Tac.Green, Modifier.fillMaxWidth(),
+                sub = "VIBRATE ON RAIN / STORM",
+                value = if (cfg.fcstAlerts) "ON" else "OFF",
+            ) {
+                val on = !cfg.fcstAlerts
+                vm.setFcstAlerts(on)
+                if (on && Build.VERSION.SDK_INT >= 33 && !ctx.granted(Manifest.permission.POST_NOTIFICATIONS)) {
+                    notifyLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+        }
+        if (cfg.fcstAlerts) {
+            item {
+                TacButton("ALERT SOURCE", Tac.Green, Modifier.fillMaxWidth(), sub = "ZAMBRETTI OR AI", value = cfg.alertSource.tag) {
+                    vm.setAlertSource(if (cfg.alertSource == Source.AI) Source.ZAMBRETTI else Source.AI)
+                }
+            }
+            item { TacButton("TEST ALERT", Tac.Dim, Modifier.fillMaxWidth(), sub = "CHECK VIBRATION") { vm.testAlert() } }
+        }
         item { TacButton("CLEAR LOG", Tac.Red, Modifier.fillMaxWidth()) { vm.clearLog() } }
         item {
             Text(
-                "ALTIKIT 1.0\nSTD ATMOSPHERE · ISA",
+                "ALTIKIT 1.1\nSTD ATMOSPHERE · ISA",
                 style = Tac.mono(9.sp, Tac.Dim), textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
             )
+        }
+    }
+}
+
+/** Both forecasters side by side, one row per hour, so they can be checked against what happened. */
+@Composable
+fun ForecastHistoryScreen(vm: MainViewModel) {
+    val all by vm.history.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { vm.loadHistory() }
+    val rows = remember(all) {
+        val now = System.currentTimeMillis()
+        all.filter { now - it.t < 24 * 3_600_000L }
+            .groupBy { it.t / 3_600_000L }.values.map { it.last() }
+            .sortedByDescending { it.t }
+    }
+    val fmt = remember { java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT) }
+    TacList {
+        item { Header("FCST LOG", Tac.Cyan, sub = "AI · ZAMBRETTI · 24H") }
+        if (rows.isEmpty()) {
+            item {
+                Text(
+                    "NOTHING YET.\nLOGGED WITH EVERY\nBACKGROUND SAMPLE.",
+                    style = Tac.mono(10.sp, Tac.Dim), textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        items(rows) { e ->
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(fmt.format(java.util.Date(e.t)), style = Tac.mono(9.sp, Tac.Dim), modifier = Modifier.width(38.dp))
+                val ai = e.ai
+                Text(
+                    if (ai == null) "--" else "${ai.short} ${(e.aiProb * 100).roundToInt()}",
+                    style = Tac.mono(10.sp, ai?.let(::wxColor) ?: Tac.Dim, bold = true), modifier = Modifier.weight(1f),
+                )
+                val z = e.zambretti
+                Text(
+                    if (z == null) "--" else "${z.letter} ${z.cls.short}",
+                    style = Tac.mono(10.sp, z?.cls?.let(::wxColor) ?: Tac.Dim, bold = true),
+                )
+            }
         }
     }
 }

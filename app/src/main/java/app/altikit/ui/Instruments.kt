@@ -21,6 +21,7 @@ import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
+import kotlin.math.min
 import kotlin.math.roundToLong
 import kotlin.math.sin
 
@@ -175,27 +176,86 @@ fun VsArc(vsMpm: Double, full: Double = 20.0, modifier: Modifier = Modifier.fill
     }
 }
 
-/** Fine horizontal ruler used as a separator; [offset] (0..1) slides the ticks for a tape effect. */
+/**
+ * Probability ring on the same 270° geometry as [ArcGauge]: one coloured segment per class, sized by its
+ * probability, clockwise from bottom left; fine ticks every 5 %. With [probs] null only the scale shows.
+ */
 @Composable
-fun Ruler(modifier: Modifier, color: Color = Tac.Tick, offset: Float = 0f) {
+fun ProbRing(probs: DoubleArray?, colors: List<Color>, modifier: Modifier = Modifier.fillMaxSize()) {
+    Canvas(modifier) {
+        val c = center
+        val r = size.minDimension / 2 - 2.dp.toPx()
+        val start = 135f
+        val sweep = 270f
+        for (i in 0..20) {
+            val deg = start + sweep * i / 20
+            val major = i % 5 == 0
+            drawLine(if (major) Tac.TickMajor else Tac.Tick, polar(c, r, deg), polar(c, r - if (major) 8.dp.toPx() else 4.dp.toPx(), deg),
+                strokeWidth = if (major) 1.5f.dp.toPx() else 1.dp.toPx())
+        }
+        val band = 7.dp.toPx()
+        val rb = r - 12.dp.toPx() - band / 2
+        val topLeft = Offset(c.x - rb, c.y - rb)
+        val box = Size(rb * 2, rb * 2)
+        drawArc(Tac.Grid, start, sweep, false, topLeft, box, style = Stroke(band, cap = StrokeCap.Butt))
+        if (probs == null) return@Canvas
+        val gap = 1.5f
+        var a = start
+        probs.forEachIndexed { i, p ->
+            val len = (p * sweep).toFloat()
+            if (len > gap) drawArc(colors[i].copy(alpha = 0.8f), a, len - gap, false, topLeft, box, style = Stroke(band, cap = StrokeCap.Butt))
+            a += len
+        }
+    }
+}
+
+/** Smallest scale (units per tick) at which [delta] fits within ±[half] ticks. */
+fun changeScale(delta: Double, scales: List<Double>, half: Int): Double =
+    scales.firstOrNull { abs(delta) / it <= half } ?: scales.last()
+
+/**
+ * Change tape under a readout: fine ticks every [scales]-picked unit with a bar from the centre index to
+ * [delta] (right = rise). Within ±[deadband] the bar is dimmed; past the end a chevron shows the overflow.
+ */
+@Composable
+fun ChangeBar(
+    modifier: Modifier,
+    delta: Double,
+    scales: List<Double>,
+    deadband: Double,
+    up: Color = Tac.Green,
+    down: Color = Tac.Red,
+) {
     Canvas(modifier) {
         val step = 4.dp.toPx()
         val y = size.height / 2
+        val cx = size.width / 2
+        val half = floor(cx / step).toInt()
         drawLine(Tac.Grid, Offset(0f, y), Offset(size.width, y), strokeWidth = 1f)
-        val shift = (offset - floor(offset)) * step * 5
-        var i = -5
-        while (true) {
-            val x = i * step + shift
-            if (x > size.width) break
-            if (x >= 0) {
-                val idx = Math.floorMod(i, 5)
-                val h = if (idx == 0) size.height / 2 else size.height / 4
-                drawLine(color, Offset(x, y - h), Offset(x, y + h), strokeWidth = 1f)
+        if (!delta.isNaN()) {
+            val ticks = (delta / changeScale(delta, scales, half - 1)).toFloat()
+            val end = cx + ticks.coerceIn(-half.toFloat(), half.toFloat()) * step
+            val col = when {
+                abs(delta) < deadband -> Tac.Dim
+                delta > 0 -> up
+                else -> down
             }
-            i++
+            val bh = size.height * 0.6f
+            drawRect(col.copy(alpha = 0.85f), Offset(min(cx, end), y - bh / 2), Size(abs(end - cx), bh))
+            if (abs(ticks) > half) {
+                val d = if (ticks > 0) 1f else -1f
+                val tip = Offset(end, y)
+                drawLine(col, Offset(end - d * 3.dp.toPx(), 0f), tip, strokeWidth = 1.5f.dp.toPx())
+                drawLine(col, Offset(end - d * 3.dp.toPx(), size.height), tip, strokeWidth = 1.5f.dp.toPx())
+            }
+        }
+        for (i in -half..half) {
+            val x = cx + i * step
+            val h = if (i % 5 == 0) size.height / 2 else size.height / 4
+            drawLine(Tac.Tick, Offset(x, y - h), Offset(x, y + h), strokeWidth = 1f)
         }
         // Centre index.
-        drawLine(Tac.Amber, Offset(size.width / 2, 0f), Offset(size.width / 2, size.height), strokeWidth = 1.5f)
+        drawLine(Tac.Amber, Offset(cx, 0f), Offset(cx, size.height), strokeWidth = 1.5f)
     }
 }
 
