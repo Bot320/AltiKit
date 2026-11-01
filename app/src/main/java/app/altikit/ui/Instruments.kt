@@ -200,10 +200,13 @@ fun ProbRing(probs: DoubleArray?, colors: List<Color>, modifier: Modifier = Modi
         drawArc(Tac.Grid, start, sweep, false, topLeft, box, style = Stroke(band, cap = StrokeCap.Butt))
         if (probs == null) return@Canvas
         val gap = 1.5f
+        // Gaps only go between segments: the last one runs to the end of the scale, as the first starts at it.
+        val last = probs.indexOfLast { it * sweep > gap }
         var a = start
         probs.forEachIndexed { i, p ->
             val len = (p * sweep).toFloat()
-            if (len > gap) drawArc(colors[i].copy(alpha = 0.8f), a, len - gap, false, topLeft, box, style = Stroke(band, cap = StrokeCap.Butt))
+            val draw = if (i == last) start + sweep - a else len - gap
+            if (len > gap) drawArc(colors[i].copy(alpha = 0.8f), a, draw, false, topLeft, box, style = Stroke(band, cap = StrokeCap.Butt))
             a += len
         }
     }
