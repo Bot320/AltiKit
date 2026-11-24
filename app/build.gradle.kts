@@ -12,8 +12,8 @@ android {
         applicationId = "app.altikit"
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     buildTypes {
@@ -61,4 +61,8 @@ dependencies {
     implementation("androidx.wear.watchface:watchface-complications-data-source-ktx:1.2.1")
     implementation("androidx.concurrent:concurrent-futures-ktx:1.2.0")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
+
+    testImplementation("junit:junit:4.13.2")
+    // The Android stub of org.json throws in JVM tests; the forecast model is parsed with it.
+    testImplementation("org.json:json:20240303")
 }

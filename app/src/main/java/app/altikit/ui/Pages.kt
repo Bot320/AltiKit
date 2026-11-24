@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -36,27 +37,47 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material3.VerticalPageIndicator
+import app.altikit.core.AutoState
+import app.altikit.core.CalSource
+import app.altikit.core.Change
+import app.altikit.core.Config
 import app.altikit.core.Mode
 import app.altikit.core.Tendency
 import app.altikit.core.Units
+import app.altikit.core.forecast.Features
+import app.altikit.core.forecast.Forecaster
+import app.altikit.core.forecast.WxClass
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
-private const val PAGES = 5
+private const val PAGES = 6
 private const val INDICATOR_HIDE_MS = 1_500L
+
+private val ALT_SCALES_M = listOf(1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0)
+private val ALT_SCALES_FT = listOf(2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0)
+private val PRESS_SCALES_HPA = listOf(0.1, 0.2, 0.5, 1.0, 2.0, 5.0)
+private val PRESS_SCALES_INHG = listOf(0.005, 0.01, 0.02, 0.05, 0.1, 0.2)
 
 @Composable
 fun MainPager(state: UiState, vm: MainViewModel, onNav: (String) -> Unit) {
@@ -76,6 +97,7 @@ fun MainPager(state: UiState, vm: MainViewModel, onNav: (String) -> Unit) {
                     1 -> BaroPage(state)
                     2 -> RelPage(state, vm, onNav)
                     3 -> TrendPage(state)
+                    4 -> ForecastPage(state, vm, onNav)
                     else -> SetupPage(state, onNav)
                 }
             }
@@ -101,9 +123,9 @@ fun MainPager(state: UiState, vm: MainViewModel, onNav: (String) -> Unit) {
             modifier = Modifier.align(Alignment.CenterEnd).graphicsLayer { alpha = indicatorAlpha },
         )
         // Clock sits in the dial's bottom gap so it never covers the 12 o'clock index.
-        BottomClock(Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp))
+        BottomClock(Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp))
         if (!state.sensorOk) {
-            Text("NO BAROMETER", style = Tac.mono(10.sp, Tac.Red, bold = true), modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp))
+            Text("NO BAROMETER", style = Tac.mono(10.sp, Tac.Red, bold = true), modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 30.dp))
         }
     }
 }
@@ -118,24 +140,69 @@ private fun BottomClock(modifier: Modifier) {
         }
     }
     val fmt = remember { java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT) }
-    Text(fmt.format(java.util.Date(now)), style = Tac.mono(10.sp, Tac.Dim), modifier = modifier)
+    Text(fmt.format(java.util.Date(now)), style = Tac.mono(15.sp, Tac.Text, bold = true), modifier = modifier)
 }
 
+/** Centre column; tapping it (no ripple) runs [onTap]. */
 @Composable
-private fun BoxScope.CenterStack(content: @Composable () -> Unit) {
+private fun BoxScope.CenterStack(onTap: (() -> Unit)? = null, content: @Composable () -> Unit) {
+    val tap = onTap?.let {
+        Modifier.clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = it)
+    } ?: Modifier
     Column(
-        Modifier.align(Alignment.Center).width(128.dp),
+        Modifier.align(Alignment.Center).width(128.dp).then(tap),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) { content() }
 }
 
 @Composable
-private fun Readout(top: String, topColor: Color, value: String, valueColor: Color, unit: String) {
-    Text(top, style = Tac.label(topColor))
+private fun Readout(top: AnnotatedString, value: String, valueColor: Color, unit: AnnotatedString) {
+    Text(top, style = Tac.label())
     Box(Modifier.drawBehind { brackets(Tac.Tick, 6.dp.toPx()) }.padding(horizontal = 8.dp)) {
         BigValue(value, valueColor)
     }
     Text(unit, style = Tac.mono(10.sp, Tac.Dim))
+}
+
+private fun windowLabel(minutes: Long) = if (minutes < 60) "${minutes}M" else "${minutes / 60}H"
+
+/** "m · 1H ▲34": unit, window and the change over it, coloured by direction. */
+private fun unitLine(
+    unit: String, windowMin: Int, change: Change?, toDisplay: (Double) -> Double, decimals: Int,
+    deadband: Double, up: Color, down: Color,
+): AnnotatedString = buildAnnotatedString {
+    append(unit)
+    append(" · ")
+    if (change == null) {
+        append("${windowLabel(windowMin.toLong())} --")
+        return@buildAnnotatedString
+    }
+    append(windowLabel(change.spanMs / 60_000) + " ")
+    val d = toDisplay(change.delta)
+    val (arrow, col) = when {
+        abs(d) < deadband -> "►" to Tac.Text
+        d > 0 -> "▲" to up
+        else -> "▼" to down
+    }
+    withStyle(SpanStyle(color = col)) { append(arrow + Units.fmt(abs(d), decimals)) }
+}
+
+/** Top label with the mode: "ALT·GPS·WX", "LOCK·GPS·WX" or "AUTO·STILL·GPS·WX". */
+private fun modeLabel(prefix: String, cfg: Config, auto: AutoState?): AnnotatedString = buildAnnotatedString {
+    when (cfg.mode) {
+        Mode.ALTIMETER -> append("$prefix·")
+        Mode.BAROMETER -> {
+            withStyle(SpanStyle(color = Tac.Violet)) { append("LOCK") }
+            append("·")
+        }
+        Mode.AUTO -> {
+            append("AUTO·")
+            val moving = (auto?.moving ?: 0f) >= 0.5f
+            withStyle(SpanStyle(color = if (moving) Tac.Amber else Tac.Cyan)) { append(if (moving) "MOVE" else "STILL") }
+            append("·")
+        }
+    }
+    append(cfg.source.tag)
 }
 
 @Composable
@@ -143,16 +210,27 @@ private fun AltitudePage(state: UiState) {
     val r = state.reading
     val u = state.units
     val cfg = state.cfg
+    val haptics = rememberHaptics()
+    var win by rememberSaveable { mutableIntStateOf(1) }
+    val window = ALT_WINDOWS[win]
+    val change = state.altChange[window]
     val disp = r?.let { u.altTo(it.altM) } ?: Double.NaN
     Box(Modifier.fillMaxSize()) {
         if (u.imperial) RotatingDial(disp, span = 300.0, minor = 10.0, majorEvery = 5, labelEvery = 2, accent = Tac.Amber)
         else RotatingDial(disp, span = 100.0, minor = 2.0, majorEvery = 5, labelEvery = 2, accent = Tac.Amber)
         VsArc(r?.vsMpm ?: Double.NaN)
-        CenterStack {
+        CenterStack(onTap = { win = (win + 1) % ALT_WINDOWS.size; haptics.tick() }) {
             Spacer(Modifier.height(6.dp))
-            Readout("ALT·${cfg.source.tag}", Tac.Dim, r?.let { u.altStr(it.altM) } ?: "----", Tac.Amber,
-                u.alt + if (cfg.mode == Mode.BAROMETER) " · LOCKED" else "")
-            Ruler(Modifier.width(96.dp).height(8.dp).padding(vertical = 1.dp), offset = (disp / 2).toFloat().takeIf { !it.isNaN() } ?: 0f)
+            Readout(
+                modeLabel("ALT", cfg, state.auto), r?.let { u.altStr(it.altM) } ?: "----", Tac.Amber,
+                unitLine(u.alt, window, change, u::altTo, 0, u.altTo(1.0), Tac.Green, Tac.Red),
+            )
+            ChangeBar(
+                Modifier.width(96.dp).height(10.dp).padding(vertical = 1.dp),
+                delta = change?.let { u.altTo(it.delta) } ?: Double.NaN,
+                scales = if (u.imperial) ALT_SCALES_FT else ALT_SCALES_M,
+                deadband = u.altTo(1.0),
+            )
             Spacer(Modifier.height(3.dp))
             DataRow("STD", r?.let { "${u.altStr(it.stdAltM)} ${u.alt}" } ?: "--", Tac.Cyan, Modifier.width(110.dp))
             val vs = r?.vsMpm ?: Double.NaN
@@ -167,6 +245,10 @@ private fun BaroPage(state: UiState) {
     val r = state.reading
     val u = state.units
     val trend = state.trend
+    val haptics = rememberHaptics()
+    var win by rememberSaveable { mutableIntStateOf(0) }
+    val window = MSL_WINDOWS[win]
+    val change = state.mslChange[window]
     val qnh = r?.qnhHpa ?: Double.NaN
     Box(Modifier.fillMaxSize()) {
         ArcGauge(
@@ -175,10 +257,19 @@ private fun BaroPage(state: UiState) {
             ghost = if (trend != null && !qnh.isNaN()) qnh - trend.delta3h else Double.NaN,
             labelFmt = { if (u.imperial) Units.fmt(u.pressTo(it), 1) else it.roundToLong().toString() },
         )
-        CenterStack {
+        CenterStack(onTap = { win = (win + 1) % MSL_WINDOWS.size; haptics.tick() }) {
             Spacer(Modifier.height(4.dp))
-            Readout("QNH·CAL", Tac.Dim, r?.let { u.pressStr(it.qnhHpa) } ?: "----", Tac.Amber, u.press)
-            Ruler(Modifier.width(96.dp).height(8.dp).padding(vertical = 1.dp))
+            Readout(
+                AnnotatedString("QNH·CAL"), r?.let { u.pressStr(it.qnhHpa) } ?: "----", Tac.Amber,
+                unitLine(u.press, window, change, u::pressTo, if (u.imperial) 2 else 1, u.pressTo(0.1), Tac.Green, Tac.Amber),
+            )
+            ChangeBar(
+                Modifier.width(96.dp).height(10.dp).padding(vertical = 1.dp),
+                delta = change?.let { u.pressTo(it.delta) } ?: Double.NaN,
+                scales = if (u.imperial) PRESS_SCALES_INHG else PRESS_SCALES_HPA,
+                deadband = u.pressTo(0.1),
+                down = Tac.Amber,
+            )
             Spacer(Modifier.height(3.dp))
             DataRow("RAW", r?.let { u.pressStr(it.stationHpa) } ?: "--", Tac.Cyan, Modifier.width(112.dp))
             if (trend != null) {
@@ -186,8 +277,13 @@ private fun BaroPage(state: UiState) {
             } else {
                 DataRow("3H", "LOGGING", Tac.Dim, Modifier.width(112.dp))
             }
-            if (state.cfg.mode == Mode.BAROMETER) {
-                Text("ALT LOCK ${u.altStr(state.cfg.fixedAlt)}${u.alt}", style = Tac.mono(9.sp, Tac.Violet))
+            when (state.cfg.mode) {
+                Mode.BAROMETER -> Text("ALT LOCK ${u.altStr(state.cfg.fixedAlt)}${u.alt}", style = Tac.mono(9.sp, Tac.Violet))
+                Mode.AUTO -> Text(
+                    "AUTO ${if ((state.auto?.moving ?: 0f) >= 0.5f) "MOVE" else "STILL"} · ${r?.let { u.altStr(it.altM) } ?: "--"}${u.alt}",
+                    style = Tac.mono(9.sp, Tac.Violet),
+                )
+                Mode.ALTIMETER -> Unit
             }
         }
     }
@@ -198,6 +294,13 @@ fun tendencyColor(t: Tendency) = when (t) {
     Tendency.STEADY -> Tac.Text
     Tendency.FALLING -> Tac.Amber
     Tendency.STORM -> Tac.Red
+}
+
+fun wxColor(c: WxClass) = when (c) {
+    WxClass.FAIR -> Tac.Green
+    WxClass.CLOUDY -> Tac.Text
+    WxClass.RAIN -> Tac.Cyan
+    WxClass.STORM -> Tac.Red
 }
 
 @Composable
@@ -213,7 +316,11 @@ private fun RelPage(state: UiState, vm: MainViewModel, onNav: (String) -> Unit) 
         else RotatingDial(disp, span = 20.0, minor = 0.5, majorEvery = 2, labelEvery = 5, accent = Tac.Violet)
         CenterStack {
             Spacer(Modifier.height(8.dp))
-            Readout("REL·ΔALT", Tac.Violet, if (active) u.altSigned(rel, 1) else "--.-", Tac.Violet, u.alt)
+            Text("REL·ΔALT", style = Tac.label(Tac.Violet))
+            Box(Modifier.drawBehind { brackets(Tac.Tick, 6.dp.toPx()) }.padding(horizontal = 8.dp)) {
+                BigValue(if (active) u.altSigned(rel, 1) else "--.-", Tac.Violet)
+            }
+            Text(u.alt, style = Tac.mono(10.sp, Tac.Dim))
             Spacer(Modifier.height(2.dp))
             DataRow("OFS", if (active && r != null) "${u.altSigned(r.altM - rel, 1)} ${u.alt}" else "--", Tac.Text, Modifier.width(112.dp))
             Spacer(Modifier.height(5.dp))
@@ -231,26 +338,38 @@ private val WINDOWS = listOf(3, 6, 12, 24, 48)
 @Composable
 private fun TrendPage(state: UiState) {
     val u = state.units
+    val haptics = rememberHaptics()
     var hours by rememberSaveable { mutableIntStateOf(6) }
-    val cycle = { hours = WINDOWS[(WINDOWS.indexOf(hours) + 1) % WINDOWS.size] }
     val now = System.currentTimeMillis()
     val from = now - hours * 3_600_000L
-    val points = state.log.filter { it.t >= from }.map { it.t to it.hpa } +
-        listOfNotNull(state.reading?.let { now to it.stationHpa })
+    // Sea-level weather pressure, so climbing a hill doesn't look like a front.
+    val points = state.log.filter { it.t >= from && !it.msl.isNaN() }.map { it.t to it.msl } +
+        listOfNotNull(state.reading?.let { now to it.mslHpa })
+    // The whole page cycles the window, like the change bars on the other pages.
     Column(
-        Modifier.fillMaxSize().padding(top = 26.dp),
+        Modifier.fillMaxSize().padding(top = 26.dp).clickable(
+            interactionSource = remember { MutableInteractionSource() }, indication = null,
+        ) {
+            hours = WINDOWS[(WINDOWS.indexOf(hours) + 1) % WINDOWS.size]
+            haptics.tick()
+        },
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("STN TREND·${hours}H ⟳", style = Tac.mono(10.sp, Tac.Cyan, bold = true), modifier = Modifier.clickable(onClick = cycle))
+        Text("MSL TREND·${hours}H ⟳", style = Tac.mono(11.sp, Tac.Cyan, bold = true))
         Spacer(Modifier.height(4.dp))
-        TrendGraph(points, from, now, u, Modifier.width(150.dp).height(76.dp).clickable(onClick = cycle))
+        TrendGraph(points, from, now, hours, u, Modifier.width(172.dp).height(116.dp))
         Spacer(Modifier.height(5.dp))
         val t = state.trend
         if (t != null) {
-            Text("${t.tendency.arrow} ${t.tendency.label}", style = Tac.mono(11.sp, tendencyColor(t.tendency), bold = true))
-            Text("3H Δ ${u.pressSigned(t.delta3h)} ${u.press}", style = Tac.mono(10.sp, Tac.Text))
+            Text(
+                buildAnnotatedString {
+                    withStyle(SpanStyle(color = tendencyColor(t.tendency))) { append("${t.tendency.arrow} ${t.tendency.label}") }
+                    append("  ${u.pressSigned(t.delta3h)}/3H")
+                },
+                style = Tac.mono(12.sp, Tac.Text, bold = true),
+            )
         } else {
-            Text("NEED 3H OF DATA", style = Tac.mono(10.sp, Tac.Dim))
+            Text("NEED 3H OF DATA", style = Tac.mono(12.sp, Tac.Dim, bold = true))
         }
         Text(
             "${state.log.size} PTS · LOG ${if (state.cfg.logMinutes == 0) "OFF" else "${state.cfg.logMinutes}m"}",
@@ -260,14 +379,14 @@ private fun TrendPage(state: UiState) {
 }
 
 @Composable
-private fun TrendGraph(points: List<Pair<Long, Double>>, from: Long, to: Long, u: Units, modifier: Modifier) {
+private fun TrendGraph(points: List<Pair<Long, Double>>, from: Long, to: Long, hours: Int, u: Units, modifier: Modifier) {
     val paint = remember {
         Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.MONOSPACE; color = Tac.Dim.toArgb() }
     }
     Canvas(modifier) {
         val w = size.width
         val h = size.height
-        // Graticule.
+        // Graticule: one column per sixth of the window.
         for (i in 0..6) {
             val x = w * i / 6
             drawLine(Tac.Grid, Offset(x, 0f), Offset(x, h), strokeWidth = 1f)
@@ -281,10 +400,19 @@ private fun TrendGraph(points: List<Pair<Long, Double>>, from: Long, to: Long, u
             val x = w * i / 30
             drawLine(Tac.Tick, Offset(x, h), Offset(x, h - if (i % 5 == 0) 5.dp.toPx() else 2.dp.toPx()), strokeWidth = 1f)
         }
-        paint.textSize = 8.dp.toPx()
+        val canvas = drawContext.canvas.nativeCanvas
+        paint.textSize = 9.dp.toPx()
+        // Time axis, inside the frame just above the bottom marks.
+        val ty = h - 7.dp.toPx()
+        paint.textAlign = Paint.Align.LEFT
+        canvas.drawText("-${hours}H", 3f, ty, paint)
+        paint.textAlign = Paint.Align.CENTER
+        canvas.drawText(if (hours % 2 == 0) "-${hours / 2}H" else "-${hours * 30}M", w / 2, ty, paint)
+        paint.textAlign = Paint.Align.RIGHT
+        canvas.drawText("NOW", w - 3f, ty, paint)
         if (points.size < 2) {
             paint.textAlign = Paint.Align.CENTER
-            drawContext.canvas.nativeCanvas.drawText("NO DATA YET", w / 2, h / 2, paint)
+            canvas.drawText("NO DATA YET", w / 2, h / 2, paint)
             return@Canvas
         }
         var lo = points.minOf { it.second }
@@ -293,16 +421,104 @@ private fun TrendGraph(points: List<Pair<Long, Double>>, from: Long, to: Long, u
             val mid = (hi + lo) / 2
             lo = mid - 1.0; hi = mid + 1.0
         }
+        // Headroom so the line clears the labels at the top and bottom.
+        val pad = (hi - lo) * 0.18
+        val top = hi + pad
+        val bottom = lo - pad
         fun px(t: Long) = ((t - from).toFloat() / (to - from)) * w
-        fun py(p: Double) = (h - ((p - lo) / (hi - lo)) * h).toFloat()
+        fun py(p: Double) = (h - ((p - bottom) / (top - bottom)) * h).toFloat()
         val path = Path()
         points.forEachIndexed { i, (t, p) -> if (i == 0) path.moveTo(px(t), py(p)) else path.lineTo(px(t), py(p)) }
-        drawPath(path, Tac.Cyan, style = Stroke(1.5f.dp.toPx()))
+        drawPath(path, Tac.Cyan, style = Stroke(2f.dp.toPx()))
         val (lt, lp) = points.last()
-        drawCircle(Tac.Amber, 2.5f.dp.toPx(), Offset(px(lt), py(lp)))
+        drawCircle(Tac.Amber, 3f.dp.toPx(), Offset(px(lt), py(lp)))
         paint.textAlign = Paint.Align.LEFT
-        drawContext.canvas.nativeCanvas.drawText(u.pressStr(hi), 2f, paint.textSize, paint)
-        drawContext.canvas.nativeCanvas.drawText(u.pressStr(lo), 2f, h - 7.dp.toPx(), paint)
+        canvas.drawText(u.pressStr(hi), 3f, paint.textSize + 2f, paint)
+        // Just above the lowest value, clear of the time axis.
+        canvas.drawText(u.pressStr(lo), 3f, py(lo) - 3f, paint)
+    }
+}
+
+/**
+ * One-time forecast: runs when the page opens and when the log changes. The ring shows the AI's
+ * probabilities as shares of the bezel, the centre the likeliest class and %. Tapping cycles the horizon.
+ */
+@Composable
+private fun ForecastPage(state: UiState, vm: MainViewModel, onNav: (String) -> Unit) {
+    val fc by vm.forecast.collectAsStateWithLifecycle()
+    val haptics = rememberHaptics()
+    val cfg = state.cfg
+    LaunchedEffect(state.log.lastOrNull()?.t, state.reading != null) { vm.runForecast() }
+    val f = fc
+    val hours = cfg.fcstHours
+    val ai = f?.ai(hours)
+    val next = Forecaster.HORIZONS.let { it[(it.indexOf(hours) + 1) % it.size] }
+    Box(Modifier.fillMaxSize()) {
+        ProbRing(ai?.probs, WxClass.entries.map(::wxColor))
+        CenterStack(onTap = { vm.setFcstHours(next); haptics.tick() }) {
+            if (f == null || f.empty) {
+                Text("FORECAST·12H", style = Tac.label(Tac.Cyan))
+                Spacer(Modifier.height(10.dp))
+                val msg = when {
+                    f == null -> "…"
+                    cfg.logMinutes == 0 -> "TURN ON\nTREND LOG"
+                    else -> "NEED ${Features.MIN_HOURS.toInt()}H OF LOG\n${hoursText(f.hoursOfData)} SO FAR"
+                }
+                Text(msg, style = Tac.mono(13.sp, Tac.Text, bold = true), textAlign = TextAlign.Center)
+                if (f != null && cfg.logMinutes == 0) {
+                    Spacer(Modifier.height(8.dp))
+                    SmallButton("SETTINGS", Tac.Cyan) { onNav("settings") }
+                }
+                return@CenterStack
+            }
+            if (ai != null) {
+                val color = wxColor(ai.cls)
+                Text("AI·NEXT ${hours}H ⟳", style = Tac.label())
+                Text(ai.cls.label, style = Tac.mono(15.sp, color, bold = true))
+                Box(Modifier.drawBehind { brackets(Tac.Tick, 6.dp.toPx()) }.padding(horizontal = 10.dp)) {
+                    BigValue("${((ai.confidence ?: 0.0) * 100).roundToInt()}%", color)
+                }
+                Spacer(Modifier.height(4.dp))
+                ai.probs?.let { ProbRow(it, ai.cls) }
+            }
+            f.zambretti?.zambretti?.let { z ->
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    buildAnnotatedString {
+                        append("ZAMB ")
+                        withStyle(SpanStyle(color = wxColor(z.cls), fontWeight = FontWeight.Bold)) { append("${z.letter} ${z.cls.label}") }
+                    },
+                    style = Tac.mono(11.sp, Tac.Dim),
+                )
+                Text(z.text, style = Tac.mono(10.sp, Tac.Text), maxLines = 1)
+            }
+            Spacer(Modifier.height(5.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // The AI also uses the absolute pressure, which is only right after calibrating.
+                val uncal = cfg.source == CalSource.STD
+                Text(
+                    if (uncal) "UNCAL" else hoursText(f.hoursOfData),
+                    style = Tac.mono(9.sp, if (uncal) Tac.Amber else Tac.Dim),
+                )
+                Spacer(Modifier.width(6.dp))
+                SmallButton("HIST", Tac.Cyan) { onNav("forecast/history") }
+            }
+        }
+    }
+}
+
+private fun hoursText(h: Double) = if (h < 1) "${(h * 60).toInt()}M" else "${h.toInt()}H${((h % 1) * 60).toInt().toString().padStart(2, '0')}"
+
+/** All four probabilities as a row of labelled numbers; the likeliest is bold. */
+@Composable
+private fun ProbRow(p: DoubleArray, top: WxClass) {
+    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        WxClass.entries.forEach { c ->
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(c.short, style = Tac.mono(8.sp, Tac.Dim))
+                Text("${(p[c.ordinal] * 100).roundToInt()}", style = Tac.mono(13.sp, wxColor(c), bold = c == top))
+            }
+        }
     }
 }
 
@@ -318,7 +534,7 @@ private fun SetupPage(state: UiState, onNav: (String) -> Unit) {
         Header("SETUP")
         Spacer(Modifier.height(4.dp))
         DataRow("CAL", "${cfg.source.tag} ${Units.age(cfg.calTime)}", Tac.Amber)
-        DataRow("QNH", "${u.pressStr(cfg.qnh)} ${u.press}")
+        DataRow("QNH", "${u.pressStr(state.reading?.qnhHpa ?: cfg.qnh)} ${u.press}")
         DataRow("ACC", if (cfg.calAccM.isNaN()) "--" else "±${u.altStr(cfg.calAccM)} ${u.alt}")
         Spacer(Modifier.height(6.dp))
         TacButton("CALIBRATE", Tac.Amber, Modifier.fillMaxWidth()) { onNav("calibrate") }

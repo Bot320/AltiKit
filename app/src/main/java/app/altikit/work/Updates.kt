@@ -11,9 +11,10 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import app.altikit.complication.AltitudeComplicationService
 import app.altikit.complication.PressureComplicationService
-import app.altikit.core.BaroSensor
 import app.altikit.core.Prefs
-import app.altikit.core.TrendLog
+import app.altikit.core.Snapshot
+import app.altikit.core.Units
+import app.altikit.core.forecast.ForecastLog
 import app.altikit.tile.AltTileService
 import java.util.concurrent.TimeUnit
 
@@ -41,13 +42,31 @@ object Updates {
             }
         }
     }
+
+    /** Continuous forecast: notifies when rain or a storm newly becomes likely (see [AlertRules]). */
+    fun checkAlerts(context: Context, snap: Snapshot, now: Long = System.currentTimeMillis()) {
+        val f = snap.forecasts[snap.config.alertSource]
+        val state = AlertRules.state(f, snap.trend)
+        var kind: AlertKind? = null
+        Prefs.get(context).update { AlertRules.decide(this, state, now).also { kind = it.first }.second }
+        val k = kind ?: return
+        val u = Units(snap.config.imperial)
+        val text = listOfNotNull(
+            f?.let { "${it.source.tag}: ${it.summary} · 12H" },
+            snap.trend?.let { "3H ${u.pressSigned(it.delta3h)} ${u.press}" },
+        ).joinToString("\n")
+        Alerts.post(context, k, text)
+    }
 }
 
+/** Background sample: logs pressure, advances AUTO mode, records both forecasts and checks alerts. */
 class LogWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        val p = BaroSensor(applicationContext).readOnce() ?: return Result.success()
-        TrendLog.append(applicationContext, p)
-        Updates.push(applicationContext)
+        val ctx = applicationContext
+        val snap = Snapshot.take(ctx, logMinAgeMs = 60_000L) ?: return Result.success()
+        ForecastLog.append(ctx, snap.forecasts)
+        if (snap.config.fcstAlerts) Updates.checkAlerts(ctx, snap)
+        Updates.push(ctx)
         return Result.success()
     }
 }

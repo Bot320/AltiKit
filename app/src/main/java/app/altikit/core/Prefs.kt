@@ -2,6 +2,7 @@ package app.altikit.core
 
 import android.content.Context
 import android.content.SharedPreferences
+import app.altikit.core.forecast.Source
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -30,9 +31,19 @@ class Prefs private constructor(context: Context) {
             imperial = sp.getBoolean("imperial", d.imperial),
             mode = runCatching { Mode.valueOf(sp.getString("mode", null)!!) }.getOrDefault(d.mode),
             fixedAlt = sp.getD("fixedAlt", d.fixedAlt),
+            autoP = sp.getD("autoP", d.autoP),
+            autoT = sp.getLong("autoT", d.autoT),
+            autoSteps = sp.getLong("autoSteps", d.autoSteps),
             relRefHpa = sp.getD("relRef", d.relRefHpa),
+            relRefQnh = sp.getD("relRefQnh", d.relRefQnh),
             relDisplay = sp.getD("relDisplay", d.relDisplay),
             logMinutes = sp.getInt("logMinutes", d.logMinutes),
+            fcstHours = sp.getInt("fcstHours", d.fcstHours),
+            fcstAlerts = sp.getBoolean("fcstAlerts", d.fcstAlerts),
+            alertSource = runCatching { Source.valueOf(sp.getString("alertSource", null)!!) }.getOrDefault(d.alertSource),
+            alertRainT = sp.getLong("alertRainT", d.alertRainT),
+            alertStormT = sp.getLong("alertStormT", d.alertStormT),
+            alertState = sp.getInt("alertState", d.alertState),
         )
     }
 
@@ -45,9 +56,19 @@ class Prefs private constructor(context: Context) {
             .putBoolean("imperial", c.imperial)
             .putString("mode", c.mode.name)
             .putD("fixedAlt", c.fixedAlt)
+            .putD("autoP", c.autoP)
+            .putLong("autoT", c.autoT)
+            .putLong("autoSteps", c.autoSteps)
             .putD("relRef", c.relRefHpa)
+            .putD("relRefQnh", c.relRefQnh)
             .putD("relDisplay", c.relDisplay)
             .putInt("logMinutes", c.logMinutes)
+            .putInt("fcstHours", c.fcstHours)
+            .putBoolean("fcstAlerts", c.fcstAlerts)
+            .putString("alertSource", c.alertSource.name)
+            .putLong("alertRainT", c.alertRainT)
+            .putLong("alertStormT", c.alertStormT)
+            .putInt("alertState", c.alertState)
             .apply()
         _config.value = c
     }

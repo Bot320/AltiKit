@@ -20,6 +20,7 @@ fun AltiKitApp(vm: MainViewModel = viewModel()) {
             composable("main") { MainPager(state, vm, go) }
             composable("calibrate") { CalibrateScreen(state, vm, go, back) }
             composable("settings") { SettingsScreen(state, vm) }
+            composable("forecast/history") { ForecastHistoryScreen(vm) }
             composable("run/gps") { CalRunScreen(gps = true, vm = vm, onDone = back) }
             composable("run/web") { CalRunScreen(gps = false, vm = vm, onDone = back) }
             composable("edit/alt") {
