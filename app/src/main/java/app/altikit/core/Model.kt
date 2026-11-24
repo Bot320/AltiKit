@@ -43,7 +43,7 @@ data class Config(
     val fcstHours: Int = 12,
     /** Continuous forecast: re-run after every background sample and notify on rain or storm. */
     val fcstAlerts: Boolean = false,
-    val alertSource: Source = Source.ZAMBRETTI,
+    val alertSource: Source = Source.AI,
     /** Last time a rain / storm alert fired, and which conditions held at the previous check. */
     val alertRainT: Long = 0L,
     val alertStormT: Long = 0L,
