@@ -100,6 +100,40 @@ Power: one prediction, all four horizons at once, is about 2,000 multiply-adds, 
 - Optional: physical activity (step counter) for AUTO mode, and notifications for forecast alerts. Both are requested only when you turn the feature on.
 - An internet connection (Wi-Fi, LTE or through your phone) for GPS + weather calibration only.
 
+## Installing on the watch
+
+Download `AltiKit-<version>.apk` from the [latest release](https://github.com/Bot320/AltiKit/releases/latest). GitHub Actions builds every release from this repository's public source; no release APK is built on anyone's own computer.
+
+**Check the download (optional).** Each release APK carries a signed build-provenance attestation that records the exact commit and workflow it was built from. With the [GitHub CLI](https://cli.github.com/):
+
+```sh
+gh attestation verify AltiKit-<version>.apk --repo Bot320/AltiKit
+```
+
+All releases are signed with the same AltiKit key, so updates install over each other. Its certificate SHA-256 is:
+
+```
+1F:8E:CC:CA:0A:88:F8:EC:ED:E7:53:06:3C:12:48:F4:40:F1:B5:5B:E1:FF:17:6C:CE:70:2D:BB:78:00:39:A6
+```
+
+`apksigner verify --print-certs AltiKit-<version>.apk` (Android SDK build-tools) shows the same value without the colons.
+
+**Install.** Wear OS has no file installer, so the APK goes on over Wi-Fi with `adb` (Android SDK platform-tools):
+
+1. On the watch, go to **Settings → System → About → Versions** and tap **Build number** 7 times.
+2. Go to **Settings → Developer options** and turn on **ADB debugging** and **Wireless debugging**. The watch must be on the same Wi-Fi as your computer.
+3. Tap **Pair new device**, then pair and install:
+
+```sh
+adb pair <ip>:<pairing-port> <code>
+adb connect <ip>:<port>        # or let adb find the watch on the network automatically
+adb install -r AltiKit-<version>.apk
+```
+
+Then add the tile from the tile editor, and the complications from any watch face's edit screen.
+
+If you installed a build of your own before, Android refuses the release APK because the signature differs. Uninstall the old build first (`adb uninstall app.altikit`); this clears its settings and trend log.
+
 ## Building
 
 You need JDK 17 and the Android SDK (platform 35).
@@ -109,22 +143,7 @@ You need JDK 17 and the Android SDK (platform 35).
 ./gradlew testDebugUnitTest   # AUTO maths, trend log, alert rules, forecast port vs. Python
 ```
 
-The release APK is about 3.6 MB, minified and signed with the debug key so it can be sideloaded:
-`app/build/outputs/apk/release/app-release.apk`
-
-## Installing on the watch
-
-1. On the watch, go to **Settings → System → About → Versions** and tap **Build number** 7 times.
-2. Go to **Settings → Developer options** and turn on **ADB debugging** and **Wireless debugging**. The watch must be on the same Wi-Fi as your computer.
-3. Tap **Pair new device**, then pair and install:
-
-```sh
-adb pair <ip>:<pairing-port> <code>
-adb connect <ip>:<port>        # or let adb find the watch on the network automatically
-adb install -r app/build/outputs/apk/release/app-release.apk
-```
-
-Then add the tile from the tile editor, and the complications from any watch face's edit screen.
+The release APK is about 3.6 MB: `app/build/outputs/apk/release/app-release.apk`. Without the release key it is signed with your local debug key, which is fine for sideloading your own build. How official releases are made is in [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Project layout
 
